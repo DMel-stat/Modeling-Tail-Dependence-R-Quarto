@@ -1,0 +1,854 @@
+---
+title: "Modeling Tail Dependence"
+author: "Domenica Melone"
+format: 
+  pdf: 
+    page-layout: full
+    papersize: A4
+    include-in-header: 
+      text: 
+        \usepackage{amsmath}
+editor: source
+toc: true
+editor_options: 
+  chunk_output_type: inline
+execute: 
+  warning: false
+---
+
+# Libraries and Data Loading
+
+```{r}
+#| output: false
+library(FRAPO)
+library(readxl)
+library(dplyr)
+library(corrr)
+library(ggplot2)
+library(tidyr)
+library(patchwork)
+```
+
+We start by uploading the excel file containing all the data.
+
+```{r}
+rm(list=ls())
+data_table = readxl::read_xlsx("COMPLETE_TABLE.xlsx")
+data_table %>% head ()
+```
+
+# Data Cleaning
+
+```{r}
+data_table = data_table %>% 
+  mutate(
+    LIFEXP = as.numeric(LIFEXP),
+    YEAR = as.numeric(YEAR),
+    COUNTRY = as.factor(COUNTRY))
+# coverting the data type of 
+# the columns LIFEXP and YEAR to numeric 
+
+# converting the data type of 
+# the column COUNTRY to factor (categorical variable)
+```
+
+We group the dataset by country so that we can perform future operations separately.
+
+```{r}
+data_table = data_table %>% group_by(COUNTRY)
+```
+
+We check for NA values and expect to find one for each country in the three variables GDP, inflation, and stock, since we lose the first observation when computing the logarithmic change.
+
+```{r}
+data_table %>% is.na() %>% colSums()
+```
+
+# Summary Statistics
+
+We can now calculate some summary statistics for the dataset and the relevant variables.
+
+```{r}
+data_table %>% 
+  summarise(observations = n(), 
+            'first year' = min(YEAR), 
+            'last year' = max(YEAR))
+```
+
+```{r}
+data_table %>% 
+  summarize( 
+    min = min(LIFEXP), 
+    max = max(LIFEXP), 
+    median = median(LIFEXP),
+    mean = mean(LIFEXP), 
+    SD = sd(LIFEXP)) %>% 
+  mutate(across(
+    min:SD, 
+    ~ round(., digits = 1))) %>% 
+  print()
+```
+
+```{r}
+data_table %>% 
+  summarize( 
+    min = min(GDP, na.rm = TRUE), 
+    max = max(GDP, na.rm = TRUE), 
+    median = median(GDP, na.rm = TRUE),
+    mean = mean(GDP, na.rm = TRUE), 
+    SD = sd(GDP, na.rm = TRUE)) %>% 
+  mutate(across(
+    min:SD, 
+    ~ round(.*100, digits = 1))) %>% 
+  print()
+```
+
+```{r}
+data_table %>% 
+  summarize(
+    min = min(STOCK, na.rm = TRUE), 
+    max = max(STOCK, na.rm = TRUE), 
+    median = median(STOCK, na.rm = TRUE),
+    mean = mean(STOCK, na.rm = TRUE), 
+    SD = sd(STOCK, na.rm = TRUE)) %>% 
+  mutate(across(
+    min:SD, 
+    ~ round(.*100, digits = 1))) %>% 
+  print()
+```
+
+```{r}
+data_table %>% 
+  summarize(
+    min = min(TEN_Y), 
+    max = max(TEN_Y),
+    median = median(TEN_Y),
+    mean = mean(TEN_Y), 
+    SD = sd(TEN_Y)) %>% 
+  mutate(across(
+    min:SD, 
+    ~ round(., digits = 1))) %>% 
+  print()
+```
+
+```{r}
+data_table %>%
+  summarize(
+    min = min(INFLATION, na.rm = TRUE), 
+    max = max(INFLATION, na.rm = TRUE), 
+    median = median(INFLATION, na.rm = TRUE),
+    mean = mean(INFLATION, na.rm = TRUE), 
+    SD = sd(INFLATION, na.rm = TRUE)) %>% 
+  mutate(across(
+    min:SD, 
+    ~ round(.*100, digits = 1))) %>% 
+  print()
+```
+
+For visualization, we can examine the boxplots. It is worthwhile to investigate the boxplot of life expectancy both for the original variable measured in years and for its logarithmic change, which represents our mortality index in the analysis.
+
+```{r}
+#| output: false
+pdf('lifexp.pdf', width = 20, height = 10)
+# to save the boxplots as pdf
+# and import them in latex
+
+# first boxplot for life expectancy
+
+bp1 = data_table %>% 
+  ggplot(aes(x = COUNTRY, y = LIFEXP)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = " ", y = "Life Expectancy")
+
+# ggplot() initializes a ggplot object
+
+# aes sets 
+# the variable 'country' on the x-axis
+# the variable 'life expectancy' on the y-axis
+
+# + geom_boxplot() adds the boxplot 
+
+# the other commands are for the look of the plot
+# including theme and labels
+
+# second boxplot for 
+# the logarithmic change of life expectancy
+
+bp2 = data_table %>%
+  mutate(log_diff_LIFEXP = c(NA, diff(log(LIFEXP)))) %>%
+  ggplot(aes(x = COUNTRY, y = log_diff_LIFEXP)) + 
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = " ", y = "Logarithmic Change of Life Expectancy")
+
+# combining the two boxplots side by side
+# using the library patchwork
+combined_plot = bp1 + bp2 + plot_layout(ncol = 2)
+
+print(combined_plot)
+
+dev.off()
+# for the pdf export
+```
+
+For the economic variables, we examine the boxplot of the logarithmic changes for all variables, except the 10-year government yield, which will not be transformed in the analysis. For the 10-year government yield, we will use the boxplot of the original variable.
+
+```{r}
+#| output: false
+pdf('eco_var.pdf', width = 20, height = 10)
+
+# transforming the data for easier plotting
+data_long = data_table %>% 
+  pivot_longer(cols = c(STOCK, TEN_Y, INFLATION, GDP), 
+               names_to = "variable", 
+               values_to = "value") %>%
+  # pivot_longer() 
+  # from the tidyverse package
+  # "lengthens" data
+  # by increasing the number of rows 
+  # and decreasing the number of columns
+  mutate(variable = recode(variable, 
+                           STOCK = "Stock Index",
+                           TEN_Y = "10 Years Government Yield",
+                           INFLATION = "Consumer Price Index",
+                           GDP = "Gross Domestic Product"))
+
+  # boxplots
+ggplot(data_long, aes(x = COUNTRY, y = value)) + 
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free_y") +
+  # this allows to 
+  # create separate plots for each variable 
+  # and arranges them in a grid layout
+  
+  # "free_y" allows each plot to have its own y-axis scale 
+  # needed here because the variables have different ranges
+  
+  theme_minimal() +
+  labs(x = " ",
+       y = " ")
+
+dev.off()
+```
+
+# Ten Worst Years and Average Performances
+
+We take the logarithmic change, defined as below, for the variable Life Expectancy.
+
+$$x_i =ln(p_i)-ln(p_{i-1})$$
+
+We furthermore exclude the two World Wars years, except for Sweden which stayed neutral.
+
+```{r}
+data_table = data_table %>% 
+  mutate(LIFEXP = c(NA, diff(log(LIFEXP)))) %>% 
+  filter(!(YEAR %in% c(1914:1918, 1939:1945) & cur_group()$COUNTRY != "SWEDEN"))
+
+data_table %>% head()
+```
+
+We can now look for the 10 worst years of the mortality index (the logarithmic change of Life Expectancy).
+
+```{r}
+ten_worst_years_df = data_table %>% 
+  arrange(LIFEXP) %>%
+  slice(1:10) %>% 
+  arrange(YEAR, .by_group = T) 
+
+ten_worst_years_df %>%
+  select(1:3) %>%
+  mutate(LIFEXP = round(LIFEXP*100, 2)) %>%
+  print(n = Inf)
+```
+
+We now compute the average over the entire sample ('full sample'), over the ten worst years ('tail'), over the subsequent years of the ten worst years ('tail +1 year'). For the stock index and the 10 years government yield, we also compute the reduction R, as in the formula below, to grasp a better idea of how much the average over the tail sample ($\bar{x}_t$) is smaller (or bigger!) with respect to the average over the full sample ($\bar{x}_s$).
+
+$$R = \frac{\bar{x}_s - \bar{x}_t}{\bar{x}_s}$$
+
+```{r}
+# 'full sample' in the perfomances table 
+full_sample = data_table %>% 
+  summarise(
+    across(GDP:TEN_Y, 
+           \(x) mean(x, na.rm = TRUE)))
+
+full_sample %>% 
+  mutate(
+    across(GDP:STOCK, ~ round(.*100, 2)),
+    TEN_Y = round(TEN_Y, 2)) %>% 
+  print()
+```
+
+```{r}
+# 'tail' in the perfomances table 
+extreme = ten_worst_years_df %>% 
+  summarise(
+    across(GDP:TEN_Y,
+           \(x) mean(x, na.rm = TRUE)))
+
+extreme %>% 
+  mutate(
+    across(GDP:STOCK, ~ round(.*100, 2)),
+    TEN_Y = round(TEN_Y, 2)) %>% 
+  print()
+```
+
+```{r}
+# 'tail + 1 year' in the perfomances table for the GDP
+extremeplus1 = data_table %>% 
+  arrange(LIFEXP, .by_group = T) %>% 
+  filter(YEAR %in% (YEAR[1:10] + 1), .preserve = T) %>% 
+  summarise('tail + 1 year' = mean(GDP))
+
+extremeplus1 %>% 
+  mutate(`tail + 1 year` = round(`tail + 1 year` * 100, 2)) %>% 
+  print()
+```
+
+```{r}
+# 'reduction' in the perfomances table
+# for stock and 10y gov. yield
+# results are in percentage
+reduction = extreme %>%
+  select(COUNTRY, STOCK, TEN_Y) %>%
+  mutate(
+    across(STOCK:TEN_Y,
+           ~ ((full_sample[[cur_column()]] - .) / full_sample[[cur_column()]])))
+
+reduction %>% 
+  mutate(
+    across(c(STOCK, TEN_Y), ~ round(. * 100, 1))) %>%
+  print()
+```
+
+Given
+
+$$p\text{-value} = \mathbb{P}(X \leq x),$$
+
+we compute the p-value for the tail averages using bootstrap with replacement and using the definition of empirical C.D.F.
+
+$\text{Definition:} \text{ Let } X_1, X_2, \ldots, X_n \text{ be i.i.d. rv’s, then the}$ $\textit{empirical c.d.f.}$ $\text{is}$: $$    \hat{F}_n(x) = \frac{1}{n} \sum_{i=1}^{n}\mathbb{I}(X_i \leq x).    $$
+
+```{r}
+#| output: false
+# bootstrapping with replacement 10.000 sets of ten years of data 
+
+# number of botstrapped samples
+num_bootstraps = 10000
+
+# empty tibbles to store bootrapped samples' average and correlation
+average_datatable = tibble()
+corr_datatable = tibble()
+kendall_datatable = tibble()
+spearman_datatable = tibble()
+
+set.seed(999)
+for (i in 1:num_bootstraps) {
+  bs_datatable = data_table %>% 
+    slice_sample(n = 10, replace = TRUE)
+  # 10 random years table
+
+  avg_dt = bs_datatable %>% 
+    summarise(across(GDP:TEN_Y, \(x) mean(x, na.rm = TRUE)))
+  # average over 10 random years for the 4 variables
+  average_datatable = bind_rows(average_datatable, avg_dt)
+  
+  cr_dt = bs_datatable %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs")))
+  # correlation between the mortality index and the 4 variables
+  # over 10 random years
+  corr_datatable = bind_rows(corr_datatable, cr_dt)
+  
+  kendall_dt = bs_datatable %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "kendall")))
+  # kendall tau between the mortality index and the 4 variables
+  # over 10 random years
+  kendall_datatable = bind_rows(kendall_datatable, kendall_dt)
+  
+  spearman_dt = bs_datatable %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "spearman")))
+  # spearman rho between the mortality index and the 4 variables
+  # over 10 random years
+  spearman_datatable = bind_rows(spearman_datatable, spearman_dt)
+  
+}
+```
+
+```{r}
+countries = unique(average_datatable$COUNTRY)
+# retrieve countries 
+variables = names(average_datatable)[-1] 
+# retrieve macroeconomic/financial indicators
+
+#ecdf_percountry = list()
+# empty list to store ecdfs
+# it is a list of lists (one list for each Country)
+
+pvalues_extreme = tibble()
+# a tibble to store the p-values 
+# of the 'tail' values 
+# in the perfomances table 
+
+pvalues_extremeplus1 = tibble()
+# a tibble to store the p-values 
+# of the 'tail + 1 year' values 
+# for the GDP 
+# in the perfomances table 
+
+for (c in countries) {
+    # iterating across countries
+  
+    #ecdf_pervariable = list()
+    # empty list to store ecdfs
+    # one ecdf per each macro./fin. indicator
+  
+    for (v in variables) {
+      # iterating across macro./fin. indicators
+        variable_values = average_datatable %>%
+            filter(COUNTRY == c) %>%
+            pull(v)
+            # retrieving the values to estimate the ecdf
+            # values are country & variable specific!
+        
+        ecdf_fun = ecdf(variable_values)
+        # computing the ecdf
+        
+        #ecdf_pervariable[[v]] = ecdf_fun
+        # storing the ecdf in the Country (e.g. Australia) list
+        
+        pv_extr = ecdf_fun(extreme %>% filter(COUNTRY == c) %>% pull(v))
+        # using the newly estimated ecdf 
+        # to compute the pvalues of the 'tail' table
+      
+        new_row = tibble(
+            COUNTRY = c,
+            VARIABLE = v,
+            P_VALUE = pv_extr)
+        pvalues_extreme = bind_rows(pvalues_extreme, new_row)
+        # saving the p-values in the first tibble
+        
+        if (v == 'GDP') {pv_extr1 = ecdf_fun(extremeplus1 %>% 
+                                  filter(COUNTRY == c) %>% 
+                                  pull('tail + 1 year'))
+                         # only for the GDP 
+                         # we compute the p-values 
+                         # of the 'tail + 1 year' averages
+                         new_row = tibble(
+                             COUNTRY = c,
+                             P_VALUE = pv_extr1)
+                         pvalues_extremeplus1 = bind_rows(pvalues_extremeplus1, 
+                                                          new_row)
+                         # saving the p-values in the second tibble
+        }
+    }
+    #ecdf_percountry[[c]] = ecdf_pervariable
+    # storing the Country (e.g. Australia) list in the list of lists
+}
+
+pvalues_extreme %>%
+  mutate(P_VALUE = P_VALUE * 100) %>% 
+  print(n = Inf)
+```
+
+```{r}
+pvalues_extremeplus1 %>%
+  mutate(P_VALUE = P_VALUE * 100) %>% 
+  print()
+```
+
+# Measures of Dependence
+
+## Pearson's rho
+
+```{r}
+# 'full sample' in Pearson’s rho table
+corr_fullsample = data_table %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs")))
+corr_fullsample %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+```
+
+```{r}
+# 'tail' in Pearson’s rho table
+corr_extreme = ten_worst_years_df %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs")))
+
+corr_extreme %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+```
+
+```{r}
+pvalues_corr = tibble()
+# a tibble to store the tail correlations p-values 
+
+for (c in countries) {
+    # iterating across countries
+    for (v in variables) {
+      # iterating across macro./fin. indicators
+        variable_values = corr_datatable %>%
+            filter(COUNTRY == c) %>%
+            pull(v)
+            # retrieving the values to estimate the ecdf
+            # values are country & variable specific!
+        
+        ecdf_fun = ecdf(variable_values)
+        # computing the ecdf
+        
+        pv_corr = ecdf_fun(corr_extreme %>% filter(COUNTRY == c) %>% pull(v))
+        # using the newly estimated ecdf to compute the pvalues
+      
+        new_row = tibble(
+            COUNTRY = c,
+            VARIABLE = v,
+            P_VALUE = pv_corr)
+        pvalues_corr = bind_rows(pvalues_corr, new_row)
+        # saving the p-values in the tibble
+    }
+}
+
+pvalues_corr %>% 
+  mutate(P_VALUE = P_VALUE * 100) %>% 
+  print(n = Inf)
+```
+
+## Kendall's tau
+
+```{r}
+kendall_fullsample = data_table %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "kendall")))
+kendall_fullsample %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+# 'full sample' in Kendall’s tau table
+```
+
+```{r}
+kendall_extreme = ten_worst_years_df %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "kendall")))
+
+kendall_extreme %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+# 'tail' in Kendall’s tau table 
+```
+
+```{r}
+pvalues_kendall = tibble()
+# a tibble to store the tail kendall's tau p-values 
+
+for (c in countries) {
+    # iterating across countries
+    for (v in variables) {
+      # iterating across macro./fin. indicators
+        variable_values = kendall_datatable %>%
+            filter(COUNTRY == c) %>%
+            pull(v)
+            # retrieving the values to estimate the ecdf
+            # values are country & variable specific!
+        
+        ecdf_fun = ecdf(variable_values)
+        # computing the ecdf
+        
+        pv_kendall = ecdf_fun(kendall_extreme %>% filter(COUNTRY == c) %>% pull(v))
+        # using the newly estimated ecdf to compute the pvalues
+      
+        new_row = tibble(
+            COUNTRY = c,
+            VARIABLE = v,
+            P_VALUE = pv_kendall)
+        pvalues_kendall = bind_rows(pvalues_kendall, new_row)
+        # saving the p-values in the tibble
+    }
+}
+
+pvalues_kendall %>% 
+  mutate(P_VALUE = P_VALUE * 100) %>% 
+  print(n = Inf)
+```
+
+## Spearman's rho
+
+```{r}
+spearman_fullsample = data_table %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "spearman")))
+spearman_fullsample %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+# 'full sample' in Spearman’s rho table
+```
+
+```{r}
+spearman_extreme = ten_worst_years_df %>%
+    summarise(across(GDP:TEN_Y, 
+                     ~ cor(LIFEXP, ., 
+                           use = "pairwise.complete.obs",
+                           method = "spearman")))
+
+spearman_extreme %>% 
+  mutate(across(GDP:TEN_Y, ~ round(., digits = 2))) %>% 
+  print()
+# 'tail' in Spearman’s rho table
+```
+
+```{r}
+pvalues_spearman = tibble()
+# a tibble to store the tail spearman's rho p-values 
+
+for (c in countries) {
+    # iterating across countries
+    for (v in variables) {
+      # iterating across macro./fin. indicators
+        variable_values = spearman_datatable %>%
+            filter(COUNTRY == c) %>%
+            pull(v)
+            # retrieving the values to estimate the ecdf
+            # values are country & variable specific!
+        
+        ecdf_fun = ecdf(variable_values)
+        # computing the ecdf
+        
+        pv_spearman = ecdf_fun(spearman_extreme %>% filter(COUNTRY == c) %>% pull(v))
+        # using the newly estimated ecdf to compute the pvalues
+      
+        new_row = tibble(
+            COUNTRY = c,
+            VARIABLE = v,
+            P_VALUE = pv_spearman)
+        pvalues_spearman = bind_rows(pvalues_spearman, new_row)
+        # saving the p-values in the tibble
+    }
+}
+
+pvalues_spearman %>% 
+  mutate(P_VALUE = P_VALUE * 100) %>% 
+  print(n = Inf)
+```
+
+## Coefficients of tail dependence
+
+We are going to use the function tdc() that returns the pairwise tail dependence coefficients between n series. The TDCs are estimated non-parametrically using the empirical tail copula.
+
+The first argument of the function is the matrix with the four economic indicators and the mortality indicator. We retain only the mortality indicator column which contains all coefficients of interest.
+
+The threshold value k in the function is the upper/lower bound for the order statistics to be considered. By default is used $$ k = \sqrt{\text{number of rows of the matrix}} $$
+
+### Upper tail dependence
+
+```{r}
+upper = tibble()
+
+for (c in countries) {
+  upper_matrix = data_table %>%
+    ungroup() %>%
+    # necessary because 
+    
+    # data_table %>% filter(COUNTRY == 'FRANCE')
+    # is equal to
+    # data_table %>% ungroup() %>% filter(COUNTRY == 'FRANCE') 
+    
+    # but
+    
+    # data_table %>% filter(COUNTRY == c) 
+    # %>% select(-YEAR, -COUNTRY) %>% tdc(method = "EmpTC", lower = FALSE)
+    
+    # adds back 'missing grouping variables: `COUNTRY`'
+    # and tdc() computes the tail coeff. for country too (not meaningfull)
+  
+    # moreover, tdc() uses
+    # k, the upper/lower bound for the order statistics, 
+    # equal to sqrt(nrow(x)) 
+    # hence, having an addtional column 'COUNTRY' would 
+    # result in biased tail coeff. 
+    # so it is necessary to remove both YEAR and COUNTRY
+    
+    filter(COUNTRY == c) %>%
+    select(-YEAR, -COUNTRY) %>%
+    tdc(method = "EmpTC", lower = FALSE)
+  
+  row = tibble(
+    COUNTRY = c,
+    LEXP_GDP = upper_matrix["LIFEXP", "GDP"],
+    LEXP_INFL = upper_matrix["LIFEXP", "INFLATION"],
+    LEXP_STOCK = upper_matrix["LIFEXP", "STOCK"],
+    LEXP_TENY = upper_matrix["LIFEXP", "TEN_Y"]
+    )
+  upper = bind_rows(upper, row)
+}
+
+upper %>% 
+  mutate(across(LEXP_GDP:LEXP_TENY, 
+                ~ round(., digits = 2))) %>% 
+  print()
+```
+
+### Lower tail dependence
+
+```{r}
+lower = tibble()
+
+for (c in countries) {
+  lower_matrix = data_table %>%
+    ungroup() %>%
+    # necessary because 
+    
+    # data_table %>% filter(COUNTRY == 'FRANCE')
+    # is equal to
+    # data_table %>% ungroup() %>% filter(COUNTRY == 'FRANCE') 
+    
+    # but
+    
+    # data_table %>% filter(COUNTRY == c) 
+    # %>% select(-YEAR, -COUNTRY) %>% tdc(method = "EmpTC", lower = FALSE)
+    
+    # adds back 'missing grouping variables: `COUNTRY`'
+    # and tdc() computes the tail coeff. for country too (not meaningfull)
+  
+    # moreover, tdc() uses
+    # k, the upper/lower bound for the order statistics, 
+    # equal to sqrt(nrow(x)) 
+    # hence, having an addtional column 'COUNTRY' would 
+    # result in biased tail coeff. 
+    # so it is necessary to remove both YEAR and COUNTRY
+    
+    filter(COUNTRY == c) %>%
+    select(-YEAR, -COUNTRY) %>%
+    tdc(method = "EmpTC", lower = TRUE)
+  
+  row = tibble(
+    COUNTRY = c,
+    LEXP_GDP = lower_matrix["LIFEXP", "GDP"],
+    LEXP_INFL = lower_matrix["LIFEXP", "INFLATION"],
+    LEXP_STOCK = lower_matrix["LIFEXP", "STOCK"],
+    LEXP_TENY = lower_matrix["LIFEXP", "TEN_Y"]
+  )
+  lower <- bind_rows(lower, row)
+}
+
+lower %>% 
+  mutate(across(LEXP_GDP:LEXP_TENY, 
+                ~ round(., digits = 2))) %>% 
+  print()
+```
+
+# Copulas
+
+```{r}
+rank_table = data_table %>% filter(COUNTRY == 'FRANCE') %>% select('LIFEXP', 'STOCK') %>% drop_na() 
+
+
+plot((rank(rank_table$LIFEXP)-0.5)/dim(rank_table)[1],(rank(rank_table$STOCK)-0.5)/dim(rank_table)[1])
+```
+
+```{r}
+library(copula)
+library(copulaSim)
+```
+
+```{r}
+cop_data = cbind((rank(rank_table$LIFEXP)-0.5)/dim(rank_table)[1],(rank(rank_table$STOCK)-0.5)/dim(rank_table)[1])
+
+fitted_cop = empCopula(cop_data)
+augmented = rCopula(1000, fitted_cop)
+plot(augmented)
+```
+
+# Block Bootstrap
+
+Fot France and Lifexp & Stock
+
+```{r}
+library('monotonicity')
+
+rank_table = data_table %>% filter(COUNTRY == 'FRANCE') %>% select('LIFEXP', 'STOCK') %>% drop_na() 
+
+set.seed(999)
+statBOO_indices = statBootstrap(T = dim(rank_table)[1], bootstrapRep = 1000, block_length = 2)
+
+all_indices <- as.vector(statBOO_indices)
+
+bootstrap_data <- rank_table[all_indices, ]
+
+extended_data <- rbind(rank_table, bootstrap_data)
+
+
+plot((rank(extended_data$LIFEXP)-0.5)/dim(extended_data)[1],(rank(extended_data$STOCK)-0.5)/dim(extended_data)[1], asp = 1)
+```
+
+```{r}
+png("comparison_plot.png", width = 800, height = 400)
+
+par(mfrow = c(1,2))
+
+plot((rank(extended_data$LIFEXP)-0.5)/dim(extended_data)[1],(rank(extended_data$STOCK)-0.5)/dim(extended_data)[1], asp = 1, xlab = "Ranked LIFEXP", ylab = "Ranked STOCK",
+     main = "Extended Data")
+
+plot((rank(rank_table$LIFEXP)-0.5)/dim(rank_table)[1],(rank(rank_table$STOCK)-0.5)/dim(rank_table)[1], asp = 1, xlab = "Ranked LIFEXP", ylab = "Ranked STOCK",
+     main = "Original Data")
+
+dev.off()
+```
+
+example: RANK REPEATS -\> no change in the graph
+
+```{r}
+ex = c(0.1, 0.55, 2, 0.87)
+
+rank(ex)
+
+ex_extended = c(0.1, 0.55, 2, 0.87, 0.55, 2, 0.87, 0.1)
+rank(ex_extended)
+```
+
+should we plot each bootstrapped dataset individually and build a distribution of the ranked scatter plots (average and sd as for the statistics distribution BS is usually used for)?
+
+No because we are going to end up with the only difference of having:
+
+-   fewer observations (BS with repl. is going to repeat (extract multiple times) some of the obs which will end up having the same rank and hence figure once (overlapping) on the rank scatterplot)
+
+-   the highest rank (once scaled by the number of obs) won't be 1
+
+-   the other obs will be the same (we will still get 1/129, 2/129, ... )
+
+```{r}
+set.seed(999)
+fewBS_indices = statBootstrap(T = dim(rank_table)[1], bootstrapRep = 7, block_length = 2)
+
+png("individualBS.png", width = 800, height = 800)  # Specify file name and dimensions
+
+par(mfrow = c(4,2))
+
+plot((rank(rank_table$LIFEXP)-0.5)/dim(rank_table)[1],(rank(rank_table$STOCK)-0.5)/dim(rank_table)[1], asp = 1, xlab = "Ranked LIFEXP", ylab = "Ranked STOCK", main = "Original Sample")
+
+for(i in 1:(ncol(fewBS_indices))){
+
+bs_data <- rank_table[fewBS_indices[,i], ]
+
+plot((rank(bs_data$LIFEXP)-0.5)/dim(bs_data)[1],(rank(bs_data$STOCK)-0.5)/dim(bs_data)[1], asp = 1, xlab = "Ranked BS LIFEXP", ylab = "Ranked BS STOCK", main = paste("Bootstrap Sample", i))
+
+}
+dev.off()
+```
